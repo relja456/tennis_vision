@@ -115,7 +115,7 @@ class TrackNet(nn.Module):
         logits = self.classifier(x)
         return logits
 
-    def train(self, epochs=5, train_loader=None):
+    def train_override(self, epochs=5, train_loader=None):
         best = 1e9
         torch.cuda.empty_cache()
         for epoch in range(1, epochs + 1):
@@ -129,7 +129,7 @@ class TrackNet(nn.Module):
                 print(f"  ↳ saved {save_path}")
 
     def train_one_epoch(self, train_loader):
-        super.train()
+        self.train()
         total, n = 0.0, 0
         pbar = tqdm(train_loader, desc="Training", leave=False)
 
