@@ -38,3 +38,4 @@ quote-style = "single"
 indent-style = "space"
 skip-magic-trailing-comma = false
 docstring-code-format = true
+
