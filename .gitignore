@@ -2,8 +2,6 @@
 datasets/
 
 # Checkpoints / models
-*.pt
-*.pth
 checkpoints/
 runs/
 logs/
