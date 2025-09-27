@@ -1,0 +1,40 @@
+# pyproject.toml
+
+[tool.ruff]
+# Enable the formatter (like Black, but built into Ruff)
+line-length = 140
+indent-width = 4
+target-version = "py311"
+
+# Rules to enable
+lint.select = [
+    "E",   # pycodestyle (PEP 8)
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade (modernize code)
+    "SIM", # flake8-simplify
+    "N",   # pep8-naming
+    "C4",  # flake8-comprehensions
+    "RUF", # Ruff-specific rules
+]
+
+# Rules to ignore (optional, depends on project preference)
+lint.ignore = [
+    "E501", # Line length (handled by formatter, no need for linting)
+    "B905", # zip() without strict – sometimes intentional
+]
+
+# Organize imports automatically
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["your_package_name"] # replace with your module name
+force-sort-within-sections = true
+lines-after-imports = 2
+
+[tool.ruff.format]
+# Use Black-compatible formatting style
+quote-style = "single"
+indent-style = "space"
+skip-magic-trailing-comma = false
+docstring-code-format = true
