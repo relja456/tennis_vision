@@ -17,5 +17,6 @@ __pycache__/
 venv/
 .env
 
-service_account.json
-client_secrets.json
+.mp4
+
+pyproject.toml
