@@ -129,7 +129,7 @@ class TrackNet(nn.Module):
                 print(f"  ↳ saved {save_path}")
 
     def train_one_epoch(self, train_loader):
-        self.train()
+        super.train()
         total, n = 0.0, 0
         pbar = tqdm(train_loader, desc="Training", leave=False)
 
