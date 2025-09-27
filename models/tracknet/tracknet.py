@@ -71,7 +71,7 @@ class TrackNet(nn.Module):
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=20)
         self.scaler = GradScaler(enabled=torch.cuda.is_available())
 
-        self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([100.0], device=self.device))
+        self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([10.0], device=self.device))
 
     def forward(self, x):
         # ----- Encoder
