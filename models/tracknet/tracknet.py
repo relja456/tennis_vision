@@ -78,6 +78,11 @@ class TrackNet(nn.Module):
 
         self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([10.0], device=self.device))
 
+        # ---- Metric config (TrackNet paper style)
+        self.DET_THRESH = 0.50  # peak prob threshold for detection
+        self.PE_TOL = 5.0  # pixels, TP if PE <= 5
+        self.GT_MIN = 0.01  # GT heatmap threshold to consider a ball present
+
     def forward(self, x):
         # ----- Encoder
         x = self.conv1_1(x)

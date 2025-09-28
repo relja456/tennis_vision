@@ -109,3 +109,14 @@
 
 # cv2.destroyAllWindows()
 
+from dataset_init.dataset_ball_only_triplet_frames import DatasetBallOnlyTripletFrames
+from dataset_init.dataset_coco_triplet_frames import DatasetCocoBallTripletMulti
+
+
+ds = DatasetCocoBallTripletMulti('C:/Users/PC/Documents/_mas/master rad/project/datasets/Tennis Ball Detection.v5i.coco')
+print(ds[0][0].shape)
+print(ds[0][1].shape)
+
+ds = DatasetBallOnlyTripletFrames('C:/Users/PC/Documents/_mas/master rad/project/datasets/ball_only')
+print(ds[0][0].shape)
+print(ds[0][1].shape)
