@@ -1,5 +1,10 @@
+import csv
+import math
 import os
+import pathlib
 
+from matplotlib import pyplot as plt
+import numpy as np
 import torch
 from torch.cuda.amp import GradScaler
 import torch.nn as nn
@@ -173,3 +178,220 @@ class TrackNet(nn.Module):
             pbar.set_postfix(loss=f'{loss.item():.4f}')
 
         return total / max(1, n)
+
+    @staticmethod
+    def _argmax2d(t: torch.Tensor):
+        """
+        t: (H,W) tensor -> returns (y, x, val)
+        """
+        _, w = t.shape
+        idx = torch.argmax(t)
+        y = (idx // w).item()
+        x = (idx % w).item()
+        return y, x, t[y, x].item()
+
+    @staticmethod
+    def _euclid(x1, y1, x2, y2):
+        dx = float(x1) - float(x2)
+        dy = float(y1) - float(y2)
+        return math.hypot(dx, dy)
+
+    def _peak_from_logits(self, logits: torch.Tensor, out_hw=None):
+        """
+        logits: (B,1,h,w) -> prob (B,1,h,w), peak (x,y,val) per item
+        If out_hw is given, resize to out_hw first.
+        """
+        if out_hw is not None and logits.shape[-2:] != out_hw:
+            logits = F.interpolate(logits, size=out_hw, mode='bilinear', align_corners=False)
+        prob = torch.sigmoid(logits)
+        peaks = []
+        for i in range(prob.size(0)):
+            y, x, v = self._argmax2d(prob[i, 0])
+            peaks.append((x, y, v))
+        return prob, peaks
+
+    def _gt_center_from_heat(self, heat: torch.Tensor):
+        """
+        heat: (B,1,H,W) target heatmaps in [0,1]
+        Returns list of (x,y) or None (if no GT ball in frame).
+        """
+        centers = []
+        for i in range(heat.size(0)):
+            y, x, v = self._argmax2d(heat[i, 0])
+            if v >= self.GT_MIN:
+                centers.append((x, y))
+            else:
+                centers.append(None)
+        return centers
+
+    @torch.no_grad()
+    def evaluate_tracknet_metrics(self, loader, save_dir=None, epoch=None):
+        """
+        Computes TrackNet-paper metrics:
+          - Precision, Recall, F1  (TP if detected & PE <= PE_TOL)
+          - Positioning Error stats: mean/median/std and % within PE_TOL (on frames with GT)
+        Also returns average BCE loss for reference and optionally saves CSV & plots.
+        """
+        self.eval()
+        total_loss, n_loss = 0.0, 0
+
+        tp = fp = fn = 0
+        pe_list = []  # PE on frames where GT exists and we produced a detection
+        within_tol = 0  # count PE <= PE_TOL among (GT exists) frames
+        gt_frames = 0  # frames with GT ball
+
+        # to track loss curve (optional aggregation per epoch only)
+        for xb, yb in tqdm(loader, desc='Metrics (val)', leave=False):
+            xb = xb.to(self.device, non_blocking=True)
+            yb = yb.to(self.device, non_blocking=True)  # (B,1,H,W) target heat
+
+            # forward
+            with torch.autocast(device_type='cuda', dtype=torch.float16, enabled=torch.cuda.is_available()):
+                logits = self(xb)
+                if logits.shape[-2:] != yb.shape[-2:]:
+                    logits = F.interpolate(logits, size=yb.shape[-2:], mode='bilinear', align_corners=False)
+                loss = self.criterion(logits, yb)
+
+            total_loss += loss.item() * xb.size(0)
+            n_loss += xb.size(0)
+
+            # predicted peaks & GT centers
+            _prob, pred_peaks = self._peak_from_logits(logits, out_hw=yb.shape[-2:])
+            gt_centers = self._gt_center_from_heat(yb)
+
+            # per frame decisions
+            for i in range(xb.size(0)):
+                px, py, pval = pred_peaks[i]
+                gt = gt_centers[i]
+
+                detected = pval >= self.DET_THRESH
+                has_gt = gt is not None
+                if has_gt:
+                    gt_frames += 1
+
+                if detected and has_gt:
+                    pe = self._euclid(px, py, gt[0], gt[1])
+                    pe_list.append(pe)
+                    if pe <= self.PE_TOL:
+                        tp += 1
+                        within_tol += 1
+                    else:
+                        fp += 1
+                elif detected and not has_gt:
+                    fp += 1
+                elif (not detected) and has_gt:
+                    fn += 1
+                # if neither detected nor has_gt => ignore (no TN in paper's headline metrics)
+
+        # aggregate metrics
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0.0
+
+        # PE stats (only frames with GT & detection)
+        if len(pe_list) > 0:
+            pe_mean = float(np.mean(pe_list))
+            pe_median = float(np.median(pe_list))
+            pe_std = float(np.std(pe_list))
+        else:
+            pe_mean = pe_median = pe_std = float('nan')
+
+        pct_within_tol = (within_tol / gt_frames) if gt_frames > 0 else 0.0
+
+        avg_loss = total_loss / max(1, n_loss)
+
+        results = {
+            'loss': avg_loss,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'tp': tp,
+            'fp': fp,
+            'fn': fn,
+            'gt_frames': gt_frames,
+            'pe_mean': pe_mean,
+            'pe_median': pe_median,
+            'pe_std': pe_std,
+            f'pct_within_{int(self.PE_TOL)}px': pct_within_tol,
+        }
+
+        # optional save
+        if save_dir is not None:
+            self._save_metrics_artifacts(results, pe_list, save_dir, epoch)
+
+        return results
+
+    # ------------- artifact saving (CSV + plots) -------------
+    def _save_metrics_artifacts(self, results: dict, pe_list, save_dir, epoch=None):
+        save_dir = pathlib.Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # CSV (append)
+        csv_path = save_dir / 'metrics_log.csv'
+        header = [
+            'epoch',
+            'loss',
+            'precision',
+            'recall',
+            'f1',
+            'tp',
+            'fp',
+            'fn',
+            'gt_frames',
+            'pe_mean',
+            'pe_median',
+            'pe_std',
+            f'pct_within_{int(self.PE_TOL)}px',
+        ]
+        write_header = not csv_path.exists()
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            if write_header:
+                w.writerow(header)
+            w.writerow(
+                [
+                    epoch if epoch is not None else -1,
+                    f'{results["loss"]:.6f}',
+                    f'{results["precision"]:.6f}',
+                    f'{results["recall"]:.6f}',
+                    f'{results["f1"]:.6f}',
+                    results['tp'],
+                    results['fp'],
+                    results['fn'],
+                    results['gt_frames'],
+                    f'{results["pe_mean"]:.6f}' if not math.isnan(results['pe_mean']) else 'nan',
+                    f'{results["pe_median"]:.6f}' if not math.isnan(results['pe_median']) else 'nan',
+                    f'{results["pe_std"]:.6f}' if not math.isnan(results['pe_std']) else 'nan',
+                    f'{results[f"pct_within_{int(self.PE_TOL)}px"]:.6f}',
+                ]
+            )
+
+        # Loss trend plot: append point to PNG (quick redraw per epoch)
+        # Here we simply redraw from CSV for simplicity
+        try:
+            import pandas as pd
+
+            df = pd.read_csv(csv_path)
+            fig = plt.figure()
+            plt.plot(df['epoch'], df['loss'])
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title('Validation Loss')
+            fig.tight_layout()
+            fig.savefig(save_dir / 'loss_curve.png', dpi=150)
+            plt.close(fig)
+        except Exception:
+            pass
+
+        # PE histogram (only if we have samples)
+        if len(pe_list) > 0:
+            fig = plt.figure()
+            plt.hist(pe_list, bins=40)
+            plt.axvline(self.PE_TOL, linestyle='--')
+            plt.xlabel('Positioning Error (px)')
+            plt.ylabel('Count')
+            ttl = f'PE Histogram (epoch {epoch})' if epoch is not None else 'PE Histogram'
+            plt.title(ttl)
+            fig.tight_layout()
+            fig.savefig(save_dir / (f'pe_hist_epoch_{epoch}.png' if epoch is not None else 'pe_hist.png'), dpi=150)
+            plt.close(fig)
