@@ -127,7 +127,7 @@ class DatasetBallOnlyTripletFrames(Dataset):
             return x, y
 
         else:
-            # --- TrackNetV4 style (multi-frame block, multi-heatmap) ---
+            # --- TrackNetV4 style ---
             half = self.T // 2
             idxs = [min(max(k, 0), len(frames) - 1) for k in range(j - half, j - half + self.T)]
 
@@ -150,4 +150,4 @@ class DatasetBallOnlyTripletFrames(Dataset):
             frames_t = torch.from_numpy(np.stack(imgs)).permute(0, 3, 1, 2).float() / 255.0  # (T,3,H,W)
             targets_t = torch.from_numpy(np.stack(heats)[:, None]).float()  # (T,1,H,W)
 
-            return (frames_t, targets_t)
+            return {'frames': frames_t, 'targets': targets_t}

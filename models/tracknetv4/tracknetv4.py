@@ -96,16 +96,31 @@ class MotionPrompt(nn.Module):
 # TrackNetV4 — per paper
 # ---------------------------
 class TrackNetV4(nn.Module):
-    def __init__(self, feat_ch=64):
+    def __init__(self, feat_ch=64, lr=1e-3, wd=1e-4, epochs=50):
         super().__init__()
-        self.visual = VisualBackbone(out_ch=feat_ch)  # TrackNetvisual(·)
+        self.visual = VisualBackbone(out_ch=feat_ch)
         self.motion = MotionPrompt()
-        # Fusion "⊚": [ V_t , A_t ⊙ V_{t+1} ]  -> 1×1 conv -> logits
         self.head = nn.Conv2d(feat_ch * 2, 1, kernel_size=1)
 
+        # init head
         nn.init.kaiming_normal_(self.head.weight, nonlinearity='linear')
         if self.head.bias is not None:
             nn.init.zeros_(self.head.bias)
+
+        # --- training objects ---
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.optimizer = torch.optim.AdamW(self.parameters(), lr=lr, weight_decay=wd)
+        self.criterion = nn.BCEWithLogitsLoss()
+        self.scaler = torch.cuda.amp.GradScaler(enabled=(self.device == 'cuda'))
+
+        # OneCycleLR scheduler (needs steps_per_epoch later!)
+        self.scheduler = None
+        self.epochs = epochs
+
+    def set_scheduler(self, train_loader):
+        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            self.optimizer, max_lr=1e-3, epochs=self.epochs, steps_per_epoch=len(train_loader), pct_start=0.3, anneal_strategy='cos'
+        )
 
     def forward(self, x_btc3hw: torch.Tensor) -> torch.Tensor:
         """
