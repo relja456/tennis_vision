@@ -163,11 +163,11 @@ class TrackNetV4(nn.Module):
             if vl < best:
                 best = vl
                 save_path = os.path.join(os.path.dirname(__file__), save_name)
-                torch.save({'model': self.model.state_dict()}, save_path)
+                torch.save({'model': self.state_dict()}, save_path)
                 print(f'  ↳ saved {save_path}')
 
     def train_one_epoch(self, loader):
-        self.model.train()
+        self.train()
         total, n = 0.0, 0
         pbar = tqdm(loader, desc='Training', leave=False)
 
@@ -179,7 +179,7 @@ class TrackNetV4(nn.Module):
             with torch.autocast(
                 device_type=('cuda' if self.device == 'cuda' else 'cpu'), dtype=torch.float16, enabled=(self.device == 'cuda')
             ):
-                logits = self.model(x)  # (B,T,1,H,W)
+                logits = self(x)  # (B,T,1,H,W)
                 if logits.shape[-2:] != y.shape[-2:]:
                     logits = F.interpolate(logits, size=y.shape[-2:], mode='bilinear', align_corners=False)
                 loss = self.criterion(logits, y)
@@ -202,13 +202,13 @@ class TrackNetV4(nn.Module):
 
     @torch.no_grad()
     def evaluate(self, loader):
-        self.model.eval()
+        self.eval()
         total, n = 0.0, 0
         for batch in loader:
             x = batch['frames'].to(self.device, non_blocking=True)
             y = batch['targets'].to(self.device, non_blocking=True)
 
-            logits = self.model(x)
+            logits = self(x)
             if logits.shape[-2:] != y.shape[-2:]:
                 logits = F.interpolate(logits, size=y.shape[-2:], mode='bilinear', align_corners=False)
 
